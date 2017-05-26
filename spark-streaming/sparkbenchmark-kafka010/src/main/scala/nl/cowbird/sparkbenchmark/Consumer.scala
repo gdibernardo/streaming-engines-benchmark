@@ -3,6 +3,7 @@ package nl.cowbird.sparkbenchmark
 
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
+
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.kafka010._
@@ -51,6 +52,7 @@ object Consumer {
     }
   }
 
+
   def applyMeanReduction(stream: MessageStream): ResultMessage = {
 
     val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
@@ -64,11 +66,50 @@ object Consumer {
     val resultValue = sum/count
 
     val currentTime = System.currentTimeMillis()
-
     val deltaTime = currentTime - firstIngestionTime
 
     return ResultMessage(id, resultValue, deltaTime, "MEAN")
   }
+
+
+  def applyMaxReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val max = stream.stream.map(_.payload).max
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, max, deltaTime, "MAX")
+  }
+
+
+  def applyMinReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val min = stream.stream.map(_.payload).min
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, min, deltaTime, "MIN")
+  }
+
+
+  def applySumReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val sum = stream.stream.map(_.payload).sum
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, sum, deltaTime, "SUM")
+  }
+
 
   def applyReduction(stream: MessageStream): Option[ResultMessage] = {
 
@@ -82,18 +123,18 @@ object Consumer {
 
       case "MEAN" => Some(applyMeanReduction(stream))
 
-      //      case "MAX" => Some(applyMaxReduction(stream))
-      //
-      //      case "MIN" => Some(applyMinReduction(stream))
-      //
-      //      case "SUM" => Some(applySumReduction(stream))
+      case "MAX" => Some(applyMaxReduction(stream))
+
+      case "MIN" => Some(applyMinReduction(stream))
+
+      case "SUM" => Some(applySumReduction(stream))
 
       case _ => None
     }
   }
 
+
   def main(args: Array[String]): Unit = {
-    
     if (args.length < 3) {
       System.exit(1)
     }

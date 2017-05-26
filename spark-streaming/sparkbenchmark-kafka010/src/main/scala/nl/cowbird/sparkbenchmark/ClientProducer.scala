@@ -1,7 +1,7 @@
 package nl.cowbird.sparkbenchmark
 
-import java.util.Properties
 
+import java.util.Properties
 
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 
@@ -16,14 +16,16 @@ object ClientProducer extends App {
 
   def defaultProperties(): Properties = {
     val properties = new Properties()
-    properties.put("acks", "all")
-    properties.put("linger.ms", Int.box(1));
 
-    properties.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer")
-    properties.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer")
+    properties.put(ProducerConfig.ACKS_CONFIG, "all")
+    properties.put(ProducerConfig.LINGER_MS_CONFIG, Int.box(1));
+
+    properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
+    properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.StringSerializer")
 
     return properties
   }
+
 
   def applyMeanReduction(map: scala.collection.mutable.Map[Int, Seq[String]]): Unit = {
     map.foreach(element => {
@@ -32,9 +34,11 @@ object ClientProducer extends App {
         val elements =  payload.split(":")
         elements(2).toDouble
       }).sum
+
       System.out.println("MEAN for ID " + element._1 + " value: " + sum/count)
     })
   }
+
 
   val broker = args(0)
   val topic = args(1)

@@ -1,7 +1,6 @@
 package nl.cowbird.sparkbenchmark
 
 
-
 import kafka.serializer.StringDecoder
 import kafka.producer.{KeyedMessage, Producer, ProducerConfig}
 
@@ -22,6 +21,7 @@ case class ResultMessage(id: String, resultValue: Double, processingTime: Long, 
 
 
 object Consumer {
+
 
   def updateMessages(key: String,
                    value: Option[Message],
@@ -47,14 +47,12 @@ object Consumer {
 
     value match {
       case Some(newMessage) => updateMessagesStream(newMessage)
-
       case _ if state.isTimingOut() => state.getOption()
     }
   }
 
 
   def applyMeanReduction(stream: MessageStream): ResultMessage = {
-
      val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
 
      val id = stream.stream(0).id
@@ -66,23 +64,50 @@ object Consumer {
      val resultValue = sum/count
 
      val currentTime = System.currentTimeMillis()
-
      val deltaTime = currentTime - firstIngestionTime
 
      return ResultMessage(id, resultValue, deltaTime, "MEAN")
   }
 
-//  def applyMaxReduction(stream: MessageStream): ResultMessage = {
-//
-//  }
-//
-//  def applyMinReduction(stream: MessageStream): ResultMessage = {
-//
-//  }
-//
-//  def applySumReduction(stream: MessageStream): ResultMessage = {
-//
-//  }
+
+  def applyMaxReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val max = stream.stream.map(_.payload).max
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, max, deltaTime, "MAX")
+  }
+
+
+  def applyMinReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val min = stream.stream.map(_.payload).min
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, min, deltaTime, "MIN")
+  }
+
+
+  def applySumReduction(stream: MessageStream): ResultMessage = {
+    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val id = stream.stream(0).id
+
+    val sum = stream.stream.map(_.payload).sum
+
+    val currentTime = System.currentTimeMillis()
+    val deltaTime = currentTime - firstIngestionTime
+
+    return ResultMessage(id, sum, deltaTime, "SUM")
+  }
+
 
   def applyReduction(stream: MessageStream): Option[ResultMessage] = {
 
@@ -96,11 +121,11 @@ object Consumer {
 
       case "MEAN" => Some(applyMeanReduction(stream))
 
-//      case "MAX" => Some(applyMaxReduction(stream))
-//
-//      case "MIN" => Some(applyMinReduction(stream))
-//
-//      case "SUM" => Some(applySumReduction(stream))
+      case "MAX" => Some(applyMaxReduction(stream))
+
+      case "MIN" => Some(applyMinReduction(stream))
+
+      case "SUM" => Some(applySumReduction(stream))
 
       case _ => None
     }
@@ -126,11 +151,11 @@ object Consumer {
     val messageStream = KafkaUtils.createDirectStream[String, String, StringDecoder, StringDecoder](streamingContext,
                                                                                                     kafkaParams,
                                                                                                     Set(inputTopic))
-
     val messages = messageStream.map(message => {
       val elements = message._2.split(":")
       (elements(0), Message(elements(0), elements(1).toLong, System.currentTimeMillis(), elements(2).toDouble, elements(3), elements(4).toInt))
     })
+
     val messagesWithState = messages.mapWithState(stateSpec)
 
     val readyForReductionMessages = messagesWithState.filter(!_.isEmpty).map(_.get).filter(_.readyForReduction == true)
@@ -139,21 +164,20 @@ object Consumer {
     defaults.put("metadata.broker.list", broker)
 
     readyForReductionMessages.foreachRDD(rdd => {
-
       rdd.foreachPartition(partition => {
-        val producerConfigurations = new ProducerConfig(defaults)
-        val producer = new Producer[String, String](producerConfigurations)
+       val producerConfigurations = new ProducerConfig(defaults)
+       val producer = new Producer[String, String](producerConfigurations)
         partition.foreach(element => {
-          val result = applyReduction(element)
-          if(!result.isEmpty) {
-            val unwrappedResult = result.get
-            val payload = "" + unwrappedResult.id + " " + unwrappedResult.resultValue + " time:" + unwrappedResult.processingTime
+         val result = applyReduction(element)
+         if(!result.isEmpty) {
+           val unwrappedResult = result.get
+           val payload = "" + unwrappedResult.id + " " + unwrappedResult.resultValue + " time:" + unwrappedResult.processingTime
 
-            val message = new KeyedMessage[String, String](outputTopic, payload)
-            producer.send(message)
+           val message = new KeyedMessage[String, String](outputTopic, payload)
+           producer.send(message)
           }
         })
-        producer.close()
+       producer.close()
       })
     })
 

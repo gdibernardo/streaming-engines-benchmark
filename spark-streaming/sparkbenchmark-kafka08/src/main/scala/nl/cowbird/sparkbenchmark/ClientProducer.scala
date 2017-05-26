@@ -21,6 +21,7 @@ object ClientProducer extends App
         return properties
     }
 
+
     def applyMeanReduction(map: scala.collection.mutable.Map[Int, Seq[String]]): Unit = {
         map.foreach(element => {
             val count = element._2.length
@@ -50,8 +51,7 @@ object ClientProducer extends App
     val map = scala.collection.mutable.Map[Int, Seq[String]]()
     val currentTime = System.currentTimeMillis()
 
-    for(index <- Range(0, numberOfEvents))
-    {
+    for(index <- Range(0, numberOfEvents)) {
          /* We should consider JSON formatting. */
          for(id <- Range(0, numberOfSensors)) {
              val payload = id + ":" + System.currentTimeMillis() + ":" + random.nextDouble() + ":" + reductionOperation + ":" + numberOfEvents
@@ -72,9 +72,7 @@ object ClientProducer extends App
 
     System.out.println("Sent " + (numberOfSensors * numberOfEvents * 1000) / (delta) + " messages per second from " + numberOfSensors + " sensors.")
 
-
-
-     producer.close()
+    producer.close()
 
     /*  Apply reduction for testing.     */
     reductionOperation match {
