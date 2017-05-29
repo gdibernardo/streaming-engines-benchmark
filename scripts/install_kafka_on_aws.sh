@@ -5,7 +5,7 @@ sudo yum install java-1.8.0
 sudo yum remove java-1.7.0-openjdk
 
 echo "wgetting Kafka 0.10.... Scala version: 2.11"
-wget http://mirror.fibergrid.in/apache/kafka/0.10.2.0/kafka_2.11-0.10.2.0.tgz
+wget http://apache.40b.nl/kafka/0.10.2.0/kafka_2.11-0.10.2.0.tgz
 
 echo "Extracting Kafka.tgz ....."
 tar -xzf kafka_2.11-0.10.2.0.tgz
