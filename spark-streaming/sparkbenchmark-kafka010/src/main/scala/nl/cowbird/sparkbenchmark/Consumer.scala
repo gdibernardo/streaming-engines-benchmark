@@ -176,7 +176,6 @@ object Consumer {
     defaults.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker)
 
     readyForReductionMessages.foreachRDD(rdd => {
-
       rdd.foreachPartition(partition => {
         val producer = new KafkaProducer[String, String](defaults)
         partition.foreach(element => {
