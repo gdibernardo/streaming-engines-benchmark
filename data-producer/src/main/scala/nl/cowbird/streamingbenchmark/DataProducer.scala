@@ -46,9 +46,9 @@ object DataProducer extends App {
   val broker = args(0)
   val topic = args(1)
   val numberOfSensors = args(2).toInt
-  val eventsFrequency = args(3).toInt
-  val numberOfEvents = args(4).toInt
-  val reductionOperation = args(5)
+  // val eventsFrequency = args(3).toInt
+  val numberOfEvents = args(3).toInt
+  val reductionOperation = args(4)
 
   val random = new Random()
 

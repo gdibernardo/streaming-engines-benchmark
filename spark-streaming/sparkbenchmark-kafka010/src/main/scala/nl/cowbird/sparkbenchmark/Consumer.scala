@@ -15,7 +15,7 @@ import org.apache.spark.streaming.kafka010.ConsumerStrategies.Subscribe
   */
 
 case class Message(id: String, emittedAt: Long, receivedAt: Long, payload: Double, reduction: String, values: Int)
-
+L
 case class MessageStream(stream: Seq[Message], readyForReduction: Boolean)
 
 case class ResultMessage(id: String, resultValue: Double, processingTime: Long, reduction: String)
