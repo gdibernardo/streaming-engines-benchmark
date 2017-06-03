@@ -3,20 +3,19 @@ package nl.cowbird.sparkbenchmark
 
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
 import org.apache.kafka.common.serialization.StringDeserializer
-
 import org.apache.spark.SparkConf
 import org.apache.spark.streaming._
 import org.apache.spark.streaming.kafka010._
 import org.apache.spark.streaming.kafka010.LocationStrategies.PreferConsistent
 import org.apache.spark.streaming.kafka010.ConsumerStrategies.Subscribe
 
+import org.codehaus.jettison.json.JSONObject
+
 /**
   * Created by gdibernardo on 26/05/2017.
   */
 
 case class Message(id: String, emittedAt: Long, receivedAt: Long, payload: Double, reduction: String, values: Int)
-L
-case class MessageStream(stream: Seq[Message], readyForReduction: Boolean)
 
 case class ResultMessage(id: String, resultValue: Double, processingTime: Long, reduction: String)
 
@@ -29,19 +28,24 @@ object Consumer {
 
     def updateMessagesStream(newMessage: Message): Option[MessageStream] = {
 
-      val existingMessages = state.getOption().map(_.stream).getOrElse(Seq[Message]())
-
-      val updatedMessages = newMessage +: existingMessages
+      val currentState = state.getOption().getOrElse(new MessageStream())
+      currentState.addMessage(newMessage)
 
       var updatedStream: Option[MessageStream] = None
 
-      if(updatedMessages.length >= newMessage.values) {
+      if(currentState.streamCount() >= newMessage.values) {
+        currentState.readyForReduction = true
+        updatedStream = Some(currentState)
+
         state.remove()
-        updatedStream = Some(MessageStream(updatedMessages, true))
       } else {
-        state.update(MessageStream(updatedMessages, false))
+        state.update(currentState)
       }
 
+      System.out.println("Updating state ..  " + newMessage.id + " value " + newMessage.payload)
+      if(updatedStream != None) {
+        System.out.println("Ready for reduction ...  " + updatedStream.get.streamCount())
+      }
       return updatedStream
     }
 
@@ -55,15 +59,11 @@ object Consumer {
 
   def applyMeanReduction(stream: MessageStream): ResultMessage = {
 
-    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
+    val firstIngestionTime = stream.firstIngestionTime()
 
-    val id = stream.stream(0).id
+    val id = stream.messageId()
 
-    val count = stream.stream.length
-
-    val sum = stream.stream.map(_.payload).sum
-
-    val resultValue = sum/count
+    val resultValue = stream.sum()/stream.streamCount()
 
     val currentTime = System.currentTimeMillis()
     val deltaTime = currentTime - firstIngestionTime
@@ -73,10 +73,10 @@ object Consumer {
 
 
   def applyMaxReduction(stream: MessageStream): ResultMessage = {
-    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
-    val id = stream.stream(0).id
+    val firstIngestionTime = stream.firstIngestionTime()
+    val id = stream.messageId()
 
-    val max = stream.stream.map(_.payload).max
+    val max = stream.max()
 
     val currentTime = System.currentTimeMillis()
     val deltaTime = currentTime - firstIngestionTime
@@ -86,10 +86,10 @@ object Consumer {
 
 
   def applyMinReduction(stream: MessageStream): ResultMessage = {
-    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
-    val id = stream.stream(0).id
+    val firstIngestionTime = stream.firstIngestionTime()
+    val id = stream.messageId()
 
-    val min = stream.stream.map(_.payload).min
+    val min = stream.min()
 
     val currentTime = System.currentTimeMillis()
     val deltaTime = currentTime - firstIngestionTime
@@ -99,10 +99,10 @@ object Consumer {
 
 
   def applySumReduction(stream: MessageStream): ResultMessage = {
-    val firstIngestionTime = stream.stream.min(Ordering.by((message:Message) => message.emittedAt)).emittedAt
-    val id = stream.stream(0).id
+    val firstIngestionTime = stream.firstIngestionTime()
+    val id = stream.messageId()
 
-    val sum = stream.stream.map(_.payload).sum
+    val sum = stream.sum()
 
     val currentTime = System.currentTimeMillis()
     val deltaTime = currentTime - firstIngestionTime
@@ -117,7 +117,7 @@ object Consumer {
       return None
     }
 
-    val operator = stream.stream(0).reduction
+    val operator = stream.reductionOperator()
 
     operator match {
 
@@ -142,13 +142,13 @@ object Consumer {
     val Array(broker, inputTopic, outputTopic) = args
 
     val sparkConf = new SparkConf().setAppName("SparkConsumer")
-    val streamingContext = new StreamingContext(sparkConf, Milliseconds(750))
+    val streamingContext = new StreamingContext(sparkConf, Seconds(1))
 
     streamingContext.checkpoint("s3n://emr-cluster-spark-bucket/checkpoint/")
 
     val stateSpec = StateSpec.function(updateMessages _).timeout(Minutes(5))
 
-    val kafkaParams = Map[String, Object](
+    val kafkaParameters = Map[String, Object](
       "bootstrap.servers" -> broker,
       "key.deserializer" -> classOf[StringDeserializer],
       "value.deserializer" -> classOf[StringDeserializer],
@@ -161,30 +161,36 @@ object Consumer {
     val messageStream = KafkaUtils.createDirectStream[String, String](
       streamingContext,
       PreferConsistent,
-      Subscribe[String, String](Array(inputTopic), kafkaParams)
+      Subscribe[String, String](Array(inputTopic), kafkaParameters)
     )
 
     val messages = messageStream.map(message => {
-      val elements = message.value().split(":")
-      (elements(0), Message(elements(0), message.timestamp(), System.currentTimeMillis(), elements(2).toDouble, elements(3), elements(4).toInt))
+      val jsonMessage = new JSONObject(message.value())
+      (jsonMessage.getString("id"), Message(jsonMessage.getString("id"), message.timestamp(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), jsonMessage.getString("reduction_mode"), jsonMessage.getInt("values")))
     })
+
+
     val messagesWithState = messages.mapWithState(stateSpec)
 
     val readyForReductionMessages = messagesWithState.filter(!_.isEmpty).map(_.get).filter(_.readyForReduction == true)
+
 
     val defaults = ClientProducer.defaultProperties()
     defaults.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker)
 
     readyForReductionMessages.foreachRDD(rdd => {
+      rdd.saveAsTextFile("s3n://emr-cluster-spark-bucket/output/")
       rdd.foreachPartition(partition => {
         val producer = new KafkaProducer[String, String](defaults)
         partition.foreach(element => {
           val result = applyReduction(element)
           if(!result.isEmpty) {
             val unwrappedResult = result.get
-            val payload = "" + unwrappedResult.id + " " + unwrappedResult.resultValue + " time:" + unwrappedResult.processingTime
-
-            val message = new ProducerRecord[String, String](outputTopic, payload)
+            val jsonPayload = new JSONObject()
+            jsonPayload.put("id", unwrappedResult.id)
+            jsonPayload.put("result_value", unwrappedResult.resultValue)
+            jsonPayload.put("processing_time", unwrappedResult.processingTime)
+            val message = new ProducerRecord[String, String](outputTopic, jsonPayload.toString)
             producer.send(message)
           }
         })

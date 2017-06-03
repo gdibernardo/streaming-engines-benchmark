@@ -5,11 +5,24 @@ import java.util.ArrayList;
 /**
  * Created by gdibernardo on 30/05/2017.
  */
+
 public class MessageStream {
 
     private Boolean readyForReduction;
 
+
     private ArrayList<Message> stream;
+
+
+    private Double minimumElementInStream = Double.MAX_VALUE;
+
+    private Double maximumElementInStream = Double.MIN_VALUE;
+
+    private Double sum = 0.0;
+
+
+    private Long firstTimestamp = Long.MAX_VALUE;
+
 
     public MessageStream() {
         stream = new ArrayList<>();
@@ -26,71 +39,55 @@ public class MessageStream {
         return readyForReduction;
     }
 
+
     public void setReadyForReduction(Boolean value) {
         readyForReduction = value;
     }
 
 
     public void addMessage(Message message) {
+
+        if(message.payload > maximumElementInStream)
+            maximumElementInStream = message.payload;
+
+        if(message.payload < minimumElementInStream)
+            minimumElementInStream = message.payload;
+
+        if(message.emittedAt < firstTimestamp)
+            firstTimestamp = message.emittedAt;
+
+        sum += message.payload;
+
         stream.add(message);
     }
 
 
-    public Message firstMessage() {
-        return stream.get(0);
+    public String messageId() {
+        return stream.get(0).id;
     }
 
-    public Message lastMessage() {
-        return stream.get(stream.size() - 1);
-    }
 
     public String reductionOperator() {
         return stream.get(0).reduction;
     }
 
+
     public Long firsIngestionTime() {
-        Long minimum = stream.get(0).emittedAt;
-
-        for(Message message : stream) {
-            if(message.emittedAt < minimum) {
-                minimum = message.emittedAt;
-            }
-        }
-
-        return minimum;
+        return firstTimestamp;
     }
+
 
     public Double getMin() {
-        Double minimum = stream.get(0).payload;
-
-        for(Message message : stream) {
-            if(message.payload < minimum) {
-                minimum = message.payload;
-            }
-        }
-
-        return minimum;
+        return minimumElementInStream;
     }
+
 
     public Double getMax() {
-        Double maximum = stream.get(0).payload;
-
-        for(Message message : stream) {
-            if(message.payload > maximum) {
-                maximum = message.payload;
-            }
-        }
-
-        return maximum;
+        return maximumElementInStream;
     }
 
+
     public Double getSum() {
-        Double sum = 0.0;
-
-        for(Message message : stream) {
-            sum += message.payload;
-        }
-
         return sum;
     }
 }

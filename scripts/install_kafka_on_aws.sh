@@ -12,7 +12,7 @@ tar -xzf kafka_2.11-0.10.2.0.tgz
 rm kafka_2.11-0.10.2.0.tgz
 
 echo "Configuring .bashrc ...."
-echo "export KAFKA_HEAP_OPTS=\"-Xmx6G -Xms6G\"" >> ~/.bashrc
+echo "export KAFKA_HEAP_OPTS=\"-Xmx12G -Xms12G\"" >> ~/.bashrc
 source ~/.bashrc
 
 echo "Starting Zookeeper server.... check log file at ~/zookeeper-logs"

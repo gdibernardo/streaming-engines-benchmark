@@ -4,6 +4,7 @@ package nl.cowbird.streamingbenchmark
 import java.util.Properties
 
 import org.apache.kafka.clients.producer.{KafkaProducer, ProducerConfig, ProducerRecord}
+import org.codehaus.jettison.json.JSONObject
 
 import scala.util.Random
 
@@ -39,7 +40,7 @@ object DataProducer extends App {
   }
 
 
-  if(args.length < 6) {
+  if(args.length < 5) {
     System.exit(1)
   }
 
@@ -59,28 +60,34 @@ object DataProducer extends App {
 
 //  val map = scala.collection.mutable.Map[Int, Seq[String]]()
 
+
   while(true) {
     for(id <- Range(0, numberOfSensors)) {
       val currentTime = System.currentTimeMillis()
       for(index <- Range(0, numberOfEvents)) {
-        val payload = id + ":" + System.currentTimeMillis() + ":" + random.nextDouble() + ":" + reductionOperation + ":" + numberOfEvents
+        val payload = new JSONObject()
+
+        payload.put("id",  id.toString)
+        payload.put("emitted_at", System.currentTimeMillis())
+        payload.put("payload", random.nextDouble())
+        payload.put("reduction_mode", reductionOperation)
+        payload.put("values", numberOfEvents)
+        // val payload = id + ":" + System.currentTimeMillis() + ":" + random.nextDouble() + ":" + reductionOperation + ":" + numberOfEvents
 //        if(map.contains(id)) {
 //          map += (id -> (map.get(id).get :+ payload))
 //        }
 //        else {
 //          map += (id -> Seq(payload))
 //        }
-        val message = new ProducerRecord[String, String](topic, payload)
+        val message = new ProducerRecord[String, String](topic, payload.toString)
         producer.send(message)
       }
 
-      val delta = System.currentTimeMillis() - currentTime
+      val delta = 1000 - (System.currentTimeMillis() - currentTime)
 
       if(delta > 0) {
-        /*  Wait one second.  */
-        Thread.sleep(1000 - delta)
-
-        // wait(1000 - delta)
+        /*  Wait at most one second.  */
+        Thread.sleep(delta)
       }
     }
   }

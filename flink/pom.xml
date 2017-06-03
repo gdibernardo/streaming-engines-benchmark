@@ -109,6 +109,13 @@ under the License.
 			<version>${log4j.version}</version>
 		</dependency>
 
+		<!--	jettison dependecy	-->
+		<dependency>
+			<groupId>org.codehaus.jettison</groupId>
+			<artifactId>jettison</artifactId>
+			<version>1.3.8</version>
+		</dependency>
+
 	</dependencies>
 
 	<profiles>

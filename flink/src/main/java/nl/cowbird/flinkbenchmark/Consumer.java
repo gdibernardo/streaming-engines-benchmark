@@ -1,5 +1,6 @@
 package nl.cowbird.flinkbenchmark;
 
+
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.common.restartstrategy.RestartStrategies;
@@ -22,8 +23,10 @@ import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010;
 import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 
-
 import org.apache.kafka.clients.consumer.ConsumerConfig;
+
+import org.codehaus.jettison.json.JSONObject;
+
 
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -32,14 +35,19 @@ import java.util.concurrent.TimeUnit;
 /**
  * Created by gdibernardo on 29/05/2017.
  */
+
+
 public class Consumer {
 
     public static final String CONSUMER_FLINK_GROUP_ID = "CONSUMER_FLINK_GROUP_ID";
 
     public static final String CHECK_POINT_DATA_URI = "s3://emr-cluster-spark-bucket/checkpoint_data_uri/";
 
+    public static final String GROUP_ID = "GROUP_ID";
 
-    public static final long CHECKPOINT_INTERVAL = 5000;
+
+    public static final long CHECKPOINT_INTERVAL = 5000;    /*  ms  */
+
 
 
     public static Properties defaultConsumingProperties() {
@@ -70,6 +78,7 @@ public class Consumer {
         Properties properties = defaultConsumingProperties();
         properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, broker);
         properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
+        properties.put(ConsumerConfig.GROUP_ID_CONFIG, GROUP_ID);
 
         FlinkKafkaConsumer010<String> consumer = new FlinkKafkaConsumer010(inputTopic, new SimpleStringSchema(), properties);
         // consumer.assignTimestampsAndWatermarks(new KafkaAssignerAndWatermarks());
@@ -77,15 +86,17 @@ public class Consumer {
         DataStream<String> messagesStream = environment.addSource(consumer);
 
         DataStream<MessageStream> readyForReductionStreams = messagesStream.rebalance().map(element -> {
-            String [] elements = element.split(":");
-            return new Tuple2<String, Message>(elements[0], new Message(elements[0], Long.parseLong(elements[1]), System.currentTimeMillis(), Double.parseDouble(elements[2]), elements[3], Integer.parseInt(elements[4])));
+            JSONObject jsonMessage = new JSONObject(element);
+            return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), jsonMessage.getLong("emitted_at"), System.currentTimeMillis(), jsonMessage.getDouble("payload"), jsonMessage.getString("reduction_mode"), jsonMessage.getInt("values")));
         }).keyBy(0).map(new StetefulMap()).filter(stream -> stream.isReadyForReduction());
 
         readyForReductionStreams.map(new MapReductionOperator()).filter(element -> element != null).map(element -> {
-            /*  Super ugly. */
-            /*  JSON should be used ASAP.    */
-            String value = "" + element.id + " " + element.resultValue + " time: " + element.processingTime;
-            return value;
+            JSONObject payload = new JSONObject();
+            payload.put("id", element.id);
+            payload.put("result_value", element.resultValue);
+            payload.put("processing_time", element.processingTime);
+            
+            return payload.toString();
         }).addSink(new FlinkKafkaProducer010(broker, outputTopic, new SimpleStringSchema()));
 
 
@@ -107,13 +118,14 @@ class KafkaAssignerAndWatermarks implements AssignerWithPeriodicWatermarks<Strin
     public Watermark getCurrentWatermark() {
         return new Watermark(System.currentTimeMillis());
     }
-
 }
 
 
 class StetefulMap extends RichMapFunction<Tuple2 <String, Message>, MessageStream> {
 
     private transient ValueState<MessageStream> internalState;
+
+    static final String STATE_DESCRIPTOR_NAME = "STATE_DESCRIPTOR_NAME";
 
     @Override
     public MessageStream map(Tuple2<String, Message> input) throws Exception {
@@ -136,7 +148,7 @@ class StetefulMap extends RichMapFunction<Tuple2 <String, Message>, MessageStrea
 
     @Override
     public void open(Configuration configuration) {
-        ValueStateDescriptor<MessageStream> descriptor = new ValueStateDescriptor("stream_state", MessageStream.class);
+        ValueStateDescriptor<MessageStream> descriptor = new ValueStateDescriptor(STATE_DESCRIPTOR_NAME, MessageStream.class);
 
         internalState = getRuntimeContext().getState(descriptor);
     }
@@ -178,7 +190,7 @@ class MapReductionOperator implements MapFunction<MessageStream, ResultMessage> 
 
     @Override
     public ResultMessage map(MessageStream input) {
-        String id = input.firstMessage().id;
+        String id = input.messageId();
         Long ingestionTime = input.firsIngestionTime();
         ResultMessage result = null;
         switch (input.reductionOperator()) {
