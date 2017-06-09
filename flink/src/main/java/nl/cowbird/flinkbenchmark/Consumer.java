@@ -1,15 +1,14 @@
 package nl.cowbird.flinkbenchmark;
 
 
-import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.functions.RichMapFunction;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.state.ValueState;
-import org.apache.flink.api.common.state.ValueStateDescriptor;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.api.java.tuple.Tuple2;
+import nl.cowbird.streamingbenchmarkcommon.*;
 
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.JoinFunction;
+
+import org.apache.flink.api.common.restartstrategy.RestartStrategies;
+import org.apache.flink.api.common.time.Time;
+import org.apache.flink.api.java.functions.KeySelector;
+import org.apache.flink.api.java.tuple.Tuple2;
 
 import org.apache.flink.runtime.state.filesystem.FsStateBackend;
 
@@ -19,14 +18,16 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.AssignerWithPeriodicWatermarks;
 import org.apache.flink.streaming.api.watermark.Watermark;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
+
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaConsumer010;
 import org.apache.flink.streaming.connectors.kafka.FlinkKafkaProducer010;
+
 import org.apache.flink.streaming.util.serialization.SimpleStringSchema;
 
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 
 import org.codehaus.jettison.json.JSONObject;
-
 
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -41,27 +42,41 @@ public class Consumer {
 
     public static final String CONSUMER_FLINK_GROUP_ID = "CONSUMER_FLINK_GROUP_ID";
 
+    public static final String CLIENT_ID = "CLIENT_ID";
+
+
     public static final String CHECK_POINT_DATA_URI = "s3://emr-cluster-spark-bucket/checkpoint_data_uri/";
 
-    public static final String GROUP_ID = "GROUP_ID";
+    public static final String CACHED_STREAM_URI = "s3://emr-cluster-spark-bucket/cache_stream.txt";
 
+    /*  TO-DO:  -   Checkpoint interval could be probably increased.    */
+    public static final long CHECKPOINT_INTERVAL = 2000;        /*  ms  */
 
-    public static final long CHECKPOINT_INTERVAL = 5000;    /*  ms  */
-
+    public static final long WINDOW_SIZE = 1000;                /*  ms  */
 
 
     public static Properties defaultConsumingProperties() {
         Properties properties = new Properties();
         properties.put(ConsumerConfig.GROUP_ID_CONFIG, CONSUMER_FLINK_GROUP_ID);
+        properties.put(ConsumerConfig.CLIENT_ID_CONFIG, CLIENT_ID);
+        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
 
         return properties;
     }
 
 
     public static void main(String args[]) throws Exception {
+
+        /*  Not conformed to the Apache Flink's best practices.    */
+        /*  ParameterTool should be used instead.   */
         if(args.length < 3) {
             System.exit(1);
         }
+
+        Boolean joinOperationEnabled = false;
+
+        if(args.length == 4)
+            joinOperationEnabled = true;
 
         String broker = args[0];
         String inputTopic = args[1];
@@ -72,145 +87,91 @@ public class Consumer {
         environment.enableCheckpointing(CHECKPOINT_INTERVAL);
         environment.getCheckpointConfig().setCheckpointingMode(CheckpointingMode.AT_LEAST_ONCE);
         environment.setRestartStrategy(RestartStrategies.fixedDelayRestart(3, Time.of(10, TimeUnit.SECONDS)));
-
         environment.setStateBackend(new FsStateBackend(CHECK_POINT_DATA_URI));
 
         Properties properties = defaultConsumingProperties();
         properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, broker);
-        properties.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "latest");
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, GROUP_ID);
 
         FlinkKafkaConsumer010<String> consumer = new FlinkKafkaConsumer010(inputTopic, new SimpleStringSchema(), properties);
-        // consumer.assignTimestampsAndWatermarks(new KafkaAssignerAndWatermarks());
+        consumer.assignTimestampsAndWatermarks(new KafkaAssignerAndWatermarks());
 
-        DataStream<String> messagesStream = environment.addSource(consumer);
+        DataStream<String> stream = environment.addSource(consumer);
 
-        DataStream<MessageStream> readyForReductionStreams = messagesStream.rebalance().map(element -> {
-            JSONObject jsonMessage = new JSONObject(element);
-            return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), jsonMessage.getLong("emitted_at"), System.currentTimeMillis(), jsonMessage.getDouble("payload"), jsonMessage.getString("reduction_mode"), jsonMessage.getInt("values")));
-        }).keyBy(0).map(new StetefulMap()).filter(stream -> stream.isReadyForReduction());
+        DataStream<Tuple2<String,Message>> messagesStream = stream
+                .rebalance()
+                .map(element -> {
+                    JSONObject jsonMessage = new JSONObject(element);
+                    return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), jsonMessage.getLong("emitted_at"), System.currentTimeMillis(), jsonMessage.getDouble("payload"), jsonMessage.getString("reduction_mode"), jsonMessage.getInt("values")));
+                })
+                .keyBy(0);
 
-        readyForReductionStreams.map(new MapReductionOperator()).filter(element -> element != null).map(element -> {
-            JSONObject payload = new JSONObject();
-            payload.put("id", element.id);
-            payload.put("result_value", element.resultValue);
-            payload.put("processing_time", element.processingTime);
-            
-            return payload.toString();
-        }).addSink(new FlinkKafkaProducer010(broker, outputTopic, new SimpleStringSchema()));
+        DataStream<StreamState> readyForReductionStreams;
 
+        if(joinOperationEnabled) {
+            DataStream<Tuple2<String,Message>> cachedStream = environment.readTextFile(CACHED_STREAM_URI)
+                    .rebalance()
+                    .map(line -> {
+                        JSONObject jsonMessage = new JSONObject(line);
+                        return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), System.currentTimeMillis(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), "-", 10000));
+                    })
+                    .keyBy(0);
+
+            readyForReductionStreams = messagesStream.join(cachedStream)
+                    .where(new MessageKeySelector())
+                    .equalTo(new MessageKeySelector())
+                    .window(TumblingProcessingTimeWindows.of(org.apache.flink.streaming.api.windowing.time.Time.milliseconds(WINDOW_SIZE)))
+                    .apply(new JoinFunction<Tuple2<String,Message>, Tuple2<String,Message>, Tuple2<String,Message>>() {
+                        @Override
+                        public Tuple2<String, Message> join(Tuple2<String, Message> firstTuple, Tuple2<String, Message> secondTuple) throws Exception {
+                            Message message = Message.initFromMessage(firstTuple.f1);
+                            message.setPayload((message.getPayload() + secondTuple.f1.getPayload()) / 2);
+                            return new Tuple2<>(firstTuple.f0, message);
+                        }
+                    })
+                    .keyBy(0)
+                    .map(new StatefulMap())
+                    .filter(element -> element != null)
+                    .filter(element -> element.isReadyForReduction);
+        } else {
+            readyForReductionStreams = messagesStream.map(new StatefulMap())
+                    .filter(element -> element != null)
+                    .filter(element -> element.isReadyForReduction);
+        }
+
+        readyForReductionStreams.map(new MapReductionOperator())
+                .filter(element -> element != null)
+                .map(element -> {
+                    JSONObject payload = new JSONObject();
+                    payload.put("id", element.getId());
+                    payload.put("result_value", element.getResultValue());
+                    payload.put("processing_time", element.getProcessingTime());
+
+                    return payload.toString();
+                })
+                .addSink(new FlinkKafkaProducer010(broker, outputTopic, new SimpleStringSchema()));
 
         environment.execute();
     }
-}
 
 
-class KafkaAssignerAndWatermarks implements AssignerWithPeriodicWatermarks<String> {
-
-    private final long maxDelay = 2000;
-
-    @Override
-    public long extractTimestamp(String element, long previousElementTimestamp) {
-        return previousElementTimestamp;
+    private static class MessageKeySelector implements KeySelector <Tuple2<String, Message>, String> {
+        @Override
+        public String getKey(Tuple2<String, Message> value) throws Exception {
+            return value.f0;
+        }
     }
 
-    @Override
-    public Watermark getCurrentWatermark() {
-        return new Watermark(System.currentTimeMillis());
-    }
-}
 
+    private static class KafkaAssignerAndWatermarks implements AssignerWithPeriodicWatermarks<String> {
 
-class StetefulMap extends RichMapFunction<Tuple2 <String, Message>, MessageStream> {
-
-    private transient ValueState<MessageStream> internalState;
-
-    static final String STATE_DESCRIPTOR_NAME = "STATE_DESCRIPTOR_NAME";
-
-    @Override
-    public MessageStream map(Tuple2<String, Message> input) throws Exception {
-
-        MessageStream currentState = internalState.value();
-
-        if(currentState == null)
-            currentState = new MessageStream();
-
-        currentState.addMessage(input.f1);
-        if(input.f1.values == currentState.getStreamCount()) {
-            currentState.setReadyForReduction(true);
-            internalState.clear();
-        } else {
-          internalState.update(currentState);
+        @Override
+        public long extractTimestamp(String element, long previousElementTimestamp) {
+            return previousElementTimestamp;
         }
 
-        return currentState;
-    }
-
-    @Override
-    public void open(Configuration configuration) {
-        ValueStateDescriptor<MessageStream> descriptor = new ValueStateDescriptor(STATE_DESCRIPTOR_NAME, MessageStream.class);
-
-        internalState = getRuntimeContext().getState(descriptor);
-    }
-}
-
-
-class MapReductionOperator implements MapFunction<MessageStream, ResultMessage> {
-
-    private ResultMessage applyMeanReduction(MessageStream stream) {
-        Double mean = stream.getSum()/stream.getStreamCount();
-
-        return new ResultMessage(new String(""), mean, new Long(0), "MEAN");
-    }
-
-
-    private ResultMessage applyMaxReduction(MessageStream stream) {
-        Double max = stream.getMax();
-
-        return new ResultMessage(new String(""), max, new Long(0), "MAX");
-    }
-
-
-    private ResultMessage applyMinReduction(MessageStream stream) {
-
-        Double min = stream.getMin();
-
-        return new ResultMessage(new String(""), min, new Long(0), "MIN");
-
-    }
-
-
-    private ResultMessage applySumReduction(MessageStream stream) {
-
-        Double sum = stream.getSum();
-
-        return new ResultMessage(new String(""), sum, new Long(0), "SUM");
-    }
-
-
-    @Override
-    public ResultMessage map(MessageStream input) {
-        String id = input.messageId();
-        Long ingestionTime = input.firsIngestionTime();
-        ResultMessage result = null;
-        switch (input.reductionOperator()) {
-            case "MEAN": result = applyMeanReduction(input);
-                         break;
-            case "MAX":  result = applyMaxReduction(input);
-                         break;
-            case "MIN":  result = applyMinReduction(input);
-                         break;
-            case "SUM":  result = applySumReduction(input);
-                         break;
-
-            default:     break;
+        @Override
+        public Watermark getCurrentWatermark() {
+            return new Watermark(System.currentTimeMillis());
         }
-
-        if(result != null) {
-            result.id = id;
-            result.processingTime = System.currentTimeMillis() - ingestionTime;
-        }
-
-        return result;
     }
 }

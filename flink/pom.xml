@@ -109,6 +109,12 @@ under the License.
 			<version>${log4j.version}</version>
 		</dependency>
 
+		<dependency>
+			<groupId>nl.cowbird.streamingbenchmark</groupId>
+			<artifactId>streaming-benchmark-common</artifactId>
+			<version>1.0</version>
+		</dependency>
+
 		<!--	jettison dependecy	-->
 		<dependency>
 			<groupId>org.codehaus.jettison</groupId>

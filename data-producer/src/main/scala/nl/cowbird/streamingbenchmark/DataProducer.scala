@@ -61,7 +61,7 @@ object DataProducer extends App {
 //  val map = scala.collection.mutable.Map[Int, Seq[String]]()
 
 
-  while(true) {
+ // while(true) {
     for(id <- Range(0, numberOfSensors)) {
       val currentTime = System.currentTimeMillis()
       for(index <- Range(0, numberOfEvents)) {
@@ -90,6 +90,6 @@ object DataProducer extends App {
         Thread.sleep(delta)
       }
     }
-  }
+  //}
   producer.close()
 }
