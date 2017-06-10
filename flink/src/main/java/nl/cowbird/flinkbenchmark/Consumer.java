@@ -47,7 +47,7 @@ public class Consumer {
 
     public static final String CHECK_POINT_DATA_URI = "s3://emr-cluster-spark-bucket/checkpoint_data_uri/";
 
-    public static final String CACHED_STREAM_URI = "s3://emr-cluster-spark-bucket/cache_stream.txt";
+    // public static final String CACHED_STREAM_URI = "s3://emr-cluster-spark-bucket/cache_stream.txt";
 
     /*  TO-DO:  -   Checkpoint interval could be probably increased.    */
     public static final long CHECKPOINT_INTERVAL = 2000;        /*  ms  */
@@ -82,6 +82,8 @@ public class Consumer {
         String inputTopic = args[1];
         String outputTopic = args[2];
 
+        String joiningTopic;
+
         StreamExecutionEnvironment environment = StreamExecutionEnvironment.getExecutionEnvironment();
         environment.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
         environment.enableCheckpointing(CHECKPOINT_INTERVAL);
@@ -108,15 +110,27 @@ public class Consumer {
         DataStream<StreamState> readyForReductionStreams;
 
         if(joinOperationEnabled) {
-            DataStream<Tuple2<String,Message>> cachedStream = environment.readTextFile(CACHED_STREAM_URI)
-                    .rebalance()
-                    .map(line -> {
-                        JSONObject jsonMessage = new JSONObject(line);
-                        return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), System.currentTimeMillis(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), "-", 10000));
-                    })
-                    .keyBy(0);
+            joiningTopic = args[3];
 
-            readyForReductionStreams = messagesStream.join(cachedStream)
+            FlinkKafkaConsumer010<String> joinedConsumer = new FlinkKafkaConsumer010<String>(joiningTopic, new SimpleStringSchema(), properties);
+            joinedConsumer.assignTimestampsAndWatermarks(new KafkaAssignerAndWatermarks());
+
+            DataStream<Tuple2<String,Message>> joinedStream = environment.addSource(joinedConsumer)
+                    .rebalance()
+                    .map(element -> {
+                        JSONObject jsonMessage = new JSONObject(element);
+                        return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), jsonMessage.getLong("emitted_at"), System.currentTimeMillis(), jsonMessage.getDouble("payload"), jsonMessage.getString("reduction_mode"), jsonMessage.getInt("values")));
+                    }).keyBy(0);
+
+//            DataStream<Tuple2<String,Message>> cachedStream = environment.readTextFile(CACHED_STREAM_URI)
+//                    .rebalance()
+//                    .map(line -> {
+//                        JSONObject jsonMessage = new JSONObject(line);
+//                        return new Tuple2<String, Message>(jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), System.currentTimeMillis(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), "-", 10000));
+//                    })
+//                    .keyBy(0);
+
+            readyForReductionStreams = messagesStream.join(joinedStream)
                     .where(new MessageKeySelector())
                     .equalTo(new MessageKeySelector())
                     .window(TumblingProcessingTimeWindows.of(org.apache.flink.streaming.api.windowing.time.Time.milliseconds(WINDOW_SIZE)))
@@ -125,20 +139,20 @@ public class Consumer {
                         public Tuple2<String, Message> join(Tuple2<String, Message> firstTuple, Tuple2<String, Message> secondTuple) throws Exception {
                             Message message = Message.initFromMessage(firstTuple.f1);
                             message.setPayload((message.getPayload() + secondTuple.f1.getPayload()) / 2);
+                            message.setValues(message.getValues() * secondTuple.f1.getValues());
+
                             return new Tuple2<>(firstTuple.f0, message);
                         }
                     })
                     .keyBy(0)
-                    .map(new StatefulMap())
-                    .filter(element -> element != null)
-                    .filter(element -> element.isReadyForReduction);
+                    .map(new StatefulMap());
         } else {
-            readyForReductionStreams = messagesStream.map(new StatefulMap())
-                    .filter(element -> element != null)
-                    .filter(element -> element.isReadyForReduction);
+            readyForReductionStreams = messagesStream.map(new StatefulMap());
         }
 
-        readyForReductionStreams.map(new MapReductionOperator())
+        readyForReductionStreams.filter(element -> element != null)
+                .filter(element -> element.isReadyForReduction)
+                .map(new MapReductionOperator())
                 .filter(element -> element != null)
                 .map(element -> {
                     JSONObject payload = new JSONObject();

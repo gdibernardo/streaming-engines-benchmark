@@ -1,9 +1,11 @@
 package nl.cowbird.streamingbenchmarkcommon;
 
+import java.io.Serializable;
+
 /**
  * Created by gdibernardo on 30/05/2017.
  */
-public class Message {
+public class Message implements Serializable {
 
     String id;
 
@@ -53,5 +55,10 @@ public class Message {
 
     public Double getPayload() {
         return this.payload;
+    }
+
+
+    public void setValues(Integer values) {
+        this.values = values;
     }
 }

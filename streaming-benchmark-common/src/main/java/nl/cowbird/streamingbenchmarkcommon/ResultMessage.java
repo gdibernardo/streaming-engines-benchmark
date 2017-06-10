@@ -1,9 +1,11 @@
 package nl.cowbird.streamingbenchmarkcommon;
 
+import java.io.Serializable;
+
 /**
  * Created by gdibernardo on 30/05/2017.
  */
-public class ResultMessage {
+public class ResultMessage implements Serializable {
 
     String id;
 

@@ -1,9 +1,11 @@
 package nl.cowbird.streamingbenchmarkcommon;
 
+import java.io.Serializable;
+
 /**
  * Created by gdibernardo on 06/06/2017.
  */
-public class StreamState {
+public class StreamState implements Serializable {
 
     private String id;
 

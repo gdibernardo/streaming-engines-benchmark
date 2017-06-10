@@ -140,11 +140,17 @@ object Consumer {
     }
 
     var joinOperationEnabled = false
+
+    var joinTopic: String = ""
     if(args.length == 4) {
       joinOperationEnabled = true
+      joinTopic = args(3)
     }
 
-    val Array(broker, inputTopic, outputTopic) = args
+    val broker = args(0)
+    val inputTopic = args(1)
+    val outputTopic = args(2)
+
 
     val sparkConf = new SparkConf().setAppName("SparkConsumer")
     val streamingContext = new StreamingContext(sparkConf, Seconds(1))
@@ -177,19 +183,21 @@ object Consumer {
     var readyForMapMessages = messages
 
     if(joinOperationEnabled) {
-      val cachedStream = streamingContext.textFileStream(CACHED_STREAM_URI)
-        .map(line => {
-          val jsonMessage = new JSONObject(line)
-          (jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), System.currentTimeMillis(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), "-", 10000))
-        })
+      val joinedMessageStream = KafkaUtils.createDirectStream[String, String](
+        streamingContext,
+        PreferConsistent,
+        Subscribe[String, String](Array(joinTopic), kafkaParameters)).map(line => {
+        val jsonMessage = new JSONObject(line.value())
+        (jsonMessage.getString("id"), new Message(jsonMessage.getString("id"), System.currentTimeMillis(), System.currentTimeMillis(), jsonMessage.getDouble("payload"), "-", 10000))
+      })
 
-      val joinedStream = messages.join(cachedStream).map(element => {
-          val firstTupleMessage = element._2._1
-          val message = Message.initFromMessage(firstTupleMessage)
-          (element._1, message)
-        })
-
-      readyForMapMessages = joinedStream
+      readyForMapMessages = messages.join(joinedMessageStream).map(element => {
+        val firstTupleMessage = element._2._1
+        val message = Message.initFromMessage(firstTupleMessage)
+        message.setPayload((message.getPayload + element._2._2.getPayload)/2)
+        /*  We can add some kind of reduction.  */
+        (element._1, message)
+      })
     }
 
     val messagesWithState = readyForMapMessages.mapWithState(stateSpec)
